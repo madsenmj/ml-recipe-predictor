@@ -1,0 +1,108 @@
+---
+title: "Recipe Machine Learning"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(reshape2)
+library(dplyr)
+library(ggplot2)
+```
+
+
+# Ratatouille Recipe Dataset
+
+I load my simulated recipes and convert all the skills and tools columns to categorical
+
+```{r}
+recipedf <- read.csv("../data/generated_recipes.csv")
+
+getColNames <- function(df,colpat)
+{
+  subset(names(df),grepl( colpat , names( df ) ))
+}
+catNames <- getColNames(recipedf,"S_|T_")
+recipedf[catNames]<-lapply(catNames, function(x) {factor(recipedf[,x])})
+
+
+head(recipedf,10)
+```
+
+
+# Test/Train split
+
+I now do an 80/20 train/test split before training the machine to identify skills.
+
+```{r}
+library(caret)
+intrain<-createDataPartition(recipedf$RID,p=0.8,list=FALSE)
+training<-recipedf[intrain,]
+testing<-recipedf[-intrain,]
+```
+
+I am going to fit models to each one of the "S" columns. 
+
+```{r}
+library(arm)
+library(pbapply)
+getPred <- function(training,testing,inputName, ScolName){
+  # With a single input, train and predict the outcome for that column
+  formula1 <- as.formula(paste(ScolName,"~", paste(getColNames(training,inputName), collapse = "+")))
+  LRfit <- bayesglm(formula1, training,family="binomial")
+  lrpredictions<-predict(LRfit,testing,type="response")
+  return(lrpredictions)
+}
+
+getResults<- function(training,testing,inputCol, outputCol){
+  # Iterate through all columns to get predictions
+  sNames<-getColNames(training,outputCol)
+  
+  probcols<-suppressWarnings(pbsapply(sNames, function(x) {getPred(training,testing,inputCol,x)}))
+  colnames(probcols) <- paste0(sNames,".prob")
+  predcols <- 1*(probcols>0.5)
+  m1<-as.matrix(sapply(testing[sNames],function(x) as.numeric(as.character(x))))
+  accCols <- 1-1*xor(m1,predcols)
+  predcols <- apply(predcols,2,FUN=function(x) {factor(x)})
+  colnames(accCols) <- paste0(sNames,".acc")
+  
+  colnames(predcols) <- paste0(sNames,".pred")
+  
+  testoutS<-cbind(testing[sNames],predcols,accCols,probcols)
+  return(testoutS)
+}
+testoutS <- getResults(training,testing,"I_","S_")
+head(testoutS)
+```
+How good did we do? This is a measure of the perfect matches.
+```{r}
+colMeans(testoutS[,grep(".acc",names(testoutS))])
+```
+
+Now predict the T columns based on the S column predictions
+
+```{r}
+sNames<-getColNames(testing,"S_")
+# Replace the training values with our predictions
+testingSnew <- testing
+testingSnew[sNames] <- NULL
+testingSnew[paste0(sNames,".pred")] <- testoutS[paste0(sNames,".pred")]
+
+# Rename the training columns to match
+trainingSnew <- training
+trainingSnew[paste0(sNames,".pred")] <- trainingSnew[sNames]
+trainingSnew[sNames] <- NULL
+
+testoutT <- getResults(trainingSnew,testingSnew,"I_|S_","T_")
+colMeans(testoutT[,grep(".acc",names(testoutT))])
+```
+
+Checking against our predictions based on the original values:
+```{r}
+testoutT2 <- getResults(training,testing,"I_|S_","T_")
+colMeans(testoutT2[,grep(".acc",names(testoutT2))])
+```
+
+So we did significantly worse in predicting "T_" when we used the predictions from the "S_" data.
+
+

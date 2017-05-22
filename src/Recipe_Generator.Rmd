@@ -1,0 +1,242 @@
+---
+title: "Ratatouille Recipe Generation"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+# Ratatouille Recipe Generation
+
+I have a handful of seed recipes from the internet that I will use to seed the algorithms to generate many more recipes.
+
+Seed recipes from:
+* http://www.epicurious.com/recipes/food/views/ratatouille-12164	
+* http://allrecipes.com/recipe/222006/disneys-ratatouille/
+* http://www.marthastewart.com/332294/ratatouille	http://allrecipes.com/recipe/18411/ratatouille/
+* http://www.thekitchn.com/one-pot-recipe-easy-french-ratatouille-recipes-from-the-kitchn-106669
+* http://www.foodnetwork.com/recipes/anne-burrell/ratatouille-recipe-1925496
+* http://www.food.com/recipe/roasted-ratatouille-75508
+* http://www.slate.com/blogs/browbeat/2012/08/22/ratatouille_with_olives_a_traditional_provenc_al_summer_vegetable_stew_.html
+* https://norecipes.com/ratatouille-recipe
+* https://smittenkitchen.com/2007/07/rat-a-too-ee-for-you-ee/	
+* http://12tomatoes.com/ratatouille-casserole/
+* https://www.popsugar.com/food/Easy-Grilled-Ratatouille-Recipe-4365543
+
+I have structured the recipes as follows:
+
+```{r, echo=FALSE}
+recipedf <- read.csv("../data/ratatouille recipes.csv")
+head(recipedf)
+```
+
+There are three types of columns (not counting the Recipe ID, RID):
+1. "I_" Ingredients - these are the eventual inputs to the machine learning algorithm
+2. "S_" Skills - these will be predicted based on the ingredients
+3. "T_" Tools - these will be predicted based on the ingredients and predicted skills.
+
+# Recipe Generation
+
+I construct more recipes engineered to match the distribution of the initial test recipes.
+
+```{r}
+npts<-50000
+
+pgDistFunc <- function (n,cpct, mu1, mu2, sig2) {
+  y0 <- rpois(n,mu1)
+  y1 <- rnorm(n,mean=mu2, sd = sig2)
+
+  flag <- rbinom(n,size=1,prob=cpct)
+  y <- y0*(1 - flag) + y1*flag 
+}
+
+# Independent Ingredients
+rmanydf <- data.frame(RID=(1:npts)+12,
+                      I_onion.ct=round(rpois(npts,6)/4,0)/2,
+                      I_garlic.cloves.ct=round(pgDistFunc(npts,0.2,0.6,6,2)/2,0)*2+2,
+                      I_eggplant.ct=round(abs(rnorm(npts,0.3,0.6))*2+2*runif(npts),0)/2,
+                      I_squash.zucchini.ct = rpois(npts,0.2)+1,
+                      I_bell.pepper.green.ct = round(rpois(npts,0.2)*2,0)/4,
+                      I_mushrooms.C = round(abs(rnorm(npts,0,0.5)),0),
+                      I_black.olives.C = round(rpois(npts,0.3)*2,0)/4,
+                      I_tomato.ripe.oz = rpois(npts,1)*6,
+                      I_liquid.oil.olive.T = rpois(npts,1)+1,
+                      I_liquid.water.C = round(pgDistFunc(npts,.1,0,.6,.1)*5,0)/5,
+                      I_liquid.vinegar.wine.red.T = rpois(npts,0.05)*3,
+                      I_liquid.vinegar.balsamic.T = rpois(npts,0.05)*3,
+                      I_spice.bay.leaf.ct = ceiling(rpois(npts,.1)/4),
+                      I_spice.basil.fresh.C = round(abs(pgDistFunc(npts,0,0.6,0,0.3)),0)/4,
+                      I_spice.parsley.t = ceiling(rpois(npts,.2)/4)*2,
+                      I_spice.oragano.t = round(abs(pgDistFunc(npts,0.1,0.1,1,1)),0)/4,
+                      I_spice.thyme.t = rpois(npts,.8)/2,
+                      I_spice.coriander.ground.t = 0.125*(runif(npts) < 0.02),
+                      I_spice.fennel.seeds.t = 0.25*(runif(npts) < 0.02),
+                      I_spice.salt.t = round(abs(pgDistFunc(npts,0.2,0.1,1,.2))/2,0)*1.5+.5,
+                      I_spice.pepper.black.ground.t = round(abs(rnorm(npts,1,.5)),0)/4,
+                      I_cheese.soft.T = round(abs(pgDistFunc(npts,0.05,0.2,8,0.1))/2,0)*2,
+                      I_cheese.parmesan.C = rpois(npts,.05)
+                      )
+
+# Dependent Ingredients
+rmanydf$I_squash.yellow.ct = floor(rpois(npts,0.2)/rmanydf$I_squash.zucchini.ct)                      
+rmanydf$I_bell.pepper.yellow.ct = round(rpois(npts,0.2)*exp(-rmanydf$I_bell.pepper.green.ct*10),0)                   
+rmanydf$I_bell.pepper.red.ct = round(rpois(npts,4)*
+                        (exp(-rmanydf$I_bell.pepper.green.ct*3)*rmanydf$I_bell.pepper.yellow.ct*
+                           exp(-rmanydf$I_bell.pepper.yellow.ct/3))/3,0) 
+rmanydf$I_tomato.canned.paste.oz <- ((rmanydf$I_tomato.ripe.oz == 0) * runif(npts) > 0.8)*6.0
+rmanydf$I_tomato.canned.whole.oz <- ((rmanydf$I_tomato.ripe.oz == 0) & (rmanydf$I_tomato.canned.paste.oz==0))*
+                                          round(runif(npts,.5,1)*2,0)*28
+
+# Skills Construction
+
+rmanydf$S_chop <- ((( rmanydf$I_onion.ct > 0 ) | # we could chop lots of ingredients...
+                  ( rmanydf$I_eggplant.ct > 0 ) | 
+                  ( rmanydf$I_bell.pepper.green.ct > 0 ) | 
+                  ( rmanydf$I_bell.pepper.yellow.ct > 0 ) | 
+                  ( rmanydf$I_bell.pepper.red.ct > 0 ) | 
+                  ( rmanydf$I_tomato.ripe.oz > 0 ) | 
+                  ( rmanydf$I_mushrooms.C > 0 ) |  
+                  ( rmanydf$I_black.olives.C > 0 ) | 
+                  ( rmanydf$I_spice.basil.fresh.C > 0 )) * runif(npts)  > 0.001)*1
+rmanydf$S_mince <- ((1+runif(npts,-0.5,0.5))*
+                        tanh(rmanydf$I_garlic.cloves.ct/max(rmanydf$I_garlic.cloves.ct)) > 0.2)*1 # Mince garlic
+rmanydf$S_peel <- (( rmanydf$I_onion.ct > 0 ) | # peel onion, garlic, and maybe eggplant
+                  ( rmanydf$I_garlic.cloves.ct > 0 ) | 
+                  ( runif(npts,-0.05,0.95)*rmanydf$I_eggplant.ct > 0 ) ) *1
+rmanydf$S_slice.thick <- ((( rmanydf$I_onion.ct > 0 ) | #onion, eggplant, zuchinni, tomato, pepper
+                  ( rmanydf$I_eggplant.ct > 0 ) | 
+                  ( rmanydf$I_squash.yellow.ct > 0 ) | 
+                  ( rmanydf$I_squash.zucchini.ct > 0 ) | 
+                  ( rmanydf$I_bell.pepper.green.ct > 0 ) | 
+                  ( rmanydf$I_bell.pepper.yellow.ct > 0 ) | 
+                  ( rmanydf$I_bell.pepper.red.ct > 0 ) | 
+                  ( rmanydf$I_tomato.ripe.oz > 0 )) * runif(npts)  > 0.5)*1
+rmanydf$S_wash <- (( ( rmanydf$I_squash.yellow.ct > 0 ) | #pepper, zuchinni
+                  ( rmanydf$I_squash.zucchini.ct > 0 ) | 
+                  ( rmanydf$I_bell.pepper.green.ct > 0 ) | 
+                  ( rmanydf$I_bell.pepper.yellow.ct > 0 ) | 
+                  ( rmanydf$I_bell.pepper.red.ct > 0 ) ) * runif(npts)  > 0.02)*1
+rmanydf$S_slice.thin  <- ((( rmanydf$I_onion.ct > 0 ) |#onion, tomato, eggplant, zuchinni, pepper, mushroom
+                  ( rmanydf$I_eggplant.ct > 0 ) | 
+                  ( rmanydf$I_squash.yellow.ct > 0 ) | 
+                  ( rmanydf$I_squash.zucchini.ct > 0 ) | 
+                  ( rmanydf$I_bell.pepper.green.ct > 0 ) | 
+                  ( rmanydf$I_bell.pepper.yellow.ct > 0 ) | 
+                  ( rmanydf$I_bell.pepper.red.ct > 0 ) | 
+                  ( rmanydf$I_tomato.ripe.oz > 0 ) |
+                  ( rmanydf$I_mushrooms.C > 0)) * runif(npts)  > 0.5)*1
+
+rmanydf$S_layer <-( (rmanydf$S_slice.thin * runif(npts) > 0.2) |
+                    (rmanydf$S_slice.thick * runif(npts) > 0.9) )*1 # usually for thinly siced things
+rmanydf$S_core <-( (( ( rmanydf$I_bell.pepper.green.ct > 0 ) | # usually peppers, maybe zuchinni or tomato
+                  ( rmanydf$I_bell.pepper.yellow.ct > 0 ) | 
+                  ( rmanydf$I_bell.pepper.red.ct > 0 ) ) * runif(npts) > 0.01) | 
+                  (( rmanydf$I_squash.yellow.ct > 0 ) | 
+                  ( rmanydf$I_squash.zucchini.ct > 0 ) |
+                  ( rmanydf$I_tomato.ripe.oz > 0 ) ) * runif(npts) > 0.9)*1
+rmanydf$S_spread <-( ((rmanydf$I_tomato.canned.paste.oz > 0) * # maybe tomato paste, can be connected to olive oil
+                       runif(npts) > 0.4) | 
+                       (rmanydf$I_liquid.oil.olive.T > 0)*runif(npts) > 0.6)*1
+rmanydf$S_drizzle <-(( (rmanydf$I_liquid.oil.olive.T > 0) | # typically olive oil, needs liquid
+                      (rmanydf$I_liquid.vinegar.balsamic.T > 0) |
+                       (rmanydf$I_liquid.vinegar.wine.red.T > 0)) * runif(npts) > 0.4 )*1
+rmanydf$S_toss <- (( (rmanydf$I_liquid.oil.olive.T > 0) | # needs liquid or spices
+                      (rmanydf$I_liquid.vinegar.balsamic.T > 0) |
+                       (rmanydf$I_spice.coriander.ground.t > 0) |
+                       (rmanydf$I_spice.oragano.t > 0) |
+                       (rmanydf$I_spice.thyme.t > 0) |
+                       (rmanydf$I_spice.salt.t > 0) |
+                       (rmanydf$I_spice.pepper.black.ground.t > 0))*runif(npts) > 0.6)*1
+
+rmanydf$S_shred <- ((rmanydf$I_spice.basil.fresh.C > 0) *runif(npts) > 0.8)*1 # only applies to fresh basil
+measnames<-names(rmanydf)[c(grep(".C$",names(rmanydf)),
+                 grep(".oz$",names(rmanydf)),
+                 grep(".\\.t$",names(rmanydf)),
+                 grep(".T$",names(rmanydf)))]
+
+rmanydf$S_measure <- (apply(matrix( # any oz, C, t or T
+              unlist(lapply(measnames, function(x) rmanydf[,x]>0)),byrow = F,nrow = nrow(rmanydf))
+              ,1,any)*runif(npts) > 0.01)*1
+rmanydf$S_dollop <- ((rmanydf$I_cheese.soft.T > 0)*runif(npts) > 0.7)*1 # only applies to cheese.soft
+sprnames<-names(rmanydf)[c(grep("^.*spice",names(rmanydf)),
+                 grep("^.*liquid",names(rmanydf)),
+                 grep("^.*cheese",names(rmanydf)))]
+rmanydf$S_sprinkle <- (apply(matrix( # liquid, cheese, spice, or chopped
+              unlist(lapply(sprnames, function(x) rmanydf[,x]>0)),byrow = F,nrow = nrow(rmanydf))
+              ,1,any)*runif(npts) > 0.6)*1
+
+rmanydf$S_crumble <- xor(((rmanydf$I_cheese.soft.T > 0)*runif(npts) > 0.7),rmanydf$S_dollop)*1 # only applies to cheese.soft (xor S_dollop)
+rmanydf$S_simmer <- (runif(npts)>0.5)*1# mostly independent
+rmanydf$S_stir <- (runif(npts)>0.5)*1 # mostly independent
+
+# Tools Construction
+
+# Kives for slicing
+rmanydf$T_knife<- (apply(matrix( 
+              unlist(lapply(c("S_slice.thick","S_slice.thin","S_mince","S_chop","S_peel"), 
+                            function(x) rmanydf[,x]>0)),byrow = F,nrow = nrow(rmanydf))
+              ,1,any)*runif(npts) > 0.001)*1
+rmanydf$T_cutting.board<-((rmanydf$T_knife > 0)*runif(npts)>0.001)*1 # cutting board with knif
+rmanydf$T_brush<-((rmanydf$S_wash > 0)*runif(npts)>0.001)*1 # Brush for washing
+rmanydf$T_scale.oz<-((rmanydf$I_tomato.ripe.oz > 0)*runif(npts)>0.001)*1 # scale for weighing
+rmanydf$T_canopener<-(((rmanydf$I_tomato.canned.whole.oz >0) |  # canopener for cans
+                          (rmanydf$I_tomato.canned.paste.oz > 0))*runif(npts)>0.001)*1
+rmanydf$T_spoon<-((rmanydf$I_tomato.canned.paste.oz > 0 |
+                     rmanydf$S_dollop > 0)*runif(npts)>0.001 | runif(npts)>0.99)*1 # spoon for scooping
+rmanydf$T_morter.pestle <- (((rmanydf$I_spice.coriander.ground.t > 0) | #Griding spices
+                       (rmanydf$I_spice.oragano.t > 0) |
+                       (rmanydf$I_spice.thyme.t > 0) |
+                       (rmanydf$I_spice.fennel.seeds.t > 0))*runif(npts) > 0.7)*1
+
+# We could bake, cook in saucepan or both.
+rmanydf$T_dish.baking<- (((rmanydf$S_layer > 0) | (rmanydf$S_spread > 0) )*(1 + runif(npts)) > 0.3)*1
+rmanydf$T_oven<- ((rmanydf$T_dish.baking > 0)*runif(npts)>0.03)*1
+rmanydf$T_skillet.large<- ((rmanydf$S_simmer==1) | ((1-rmanydf$T_oven) + runif(npts,0,0.5) ) > 0.9)*1
+rmanydf$T_pot.cover<- ((rmanydf$T_skillet.large * runif(npts)) > 0.7) * 1
+rmanydf$T_spatula<-(( rmanydf$T_skillet.large * runif(npts))>0.03)*1
+
+rmanydf$T_cook.burner<-(( rmanydf$T_skillet.large * runif(npts))>0.03)*1
+rmanydf$T_dutch.oven <- (rmanydf$T_oven & (1-rmanydf$T_dish.baking))*1
+
+# Determining which measuring tools we need
+measnames<-names(rmanydf)[grep("^I_.*C$",names(rmanydf))]
+#Whole units
+rmanydf$T_measure.C.1 <-apply( matrix(unlist(lapply(measnames, function(x) ((rmanydf[,x]>0)&(floor(rmanydf[,x])==rmanydf[,x])))),byrow = F,nrow = nrow(rmanydf)),1,any)*1
+#half units
+rmanydf$T_measure.C.0.5 <-( apply( matrix(unlist(lapply(measnames, function(x) ((rmanydf[,x]>0)&(((rmanydf[,x]*2)%%2)==1)))),byrow = F,nrow = nrow(rmanydf)),1,any))*1
+#quarter units
+rmanydf$T_measure.C.0.25 <-( apply( matrix(unlist(lapply(measnames, function(x) ((rmanydf[,x]>0)&(rmanydf[,x]*4)%%2==1))),byrow = F,nrow = nrow(rmanydf)),1,any))*1
+
+measnames<-names(rmanydf)[grep("^I_.*\\.t$",names(rmanydf))]
+#Whole units
+rmanydf$T_measure.t.1 <-apply( matrix(unlist(lapply(measnames, function(x) ((rmanydf[,x]>0)&(floor(rmanydf[,x])==rmanydf[,x])))),byrow = F,nrow = nrow(rmanydf)),1,any)*1
+#half units
+rmanydf$T_measure.t.0.5 <-( apply( matrix(unlist(lapply(measnames, function(x) ((rmanydf[,x]>0)&(((rmanydf[,x]*2)%%2)==1)))),byrow = F,nrow = nrow(rmanydf)),1,any))*1
+#quarter units
+rmanydf$T_measure.t.0.25 <-( apply( matrix(unlist(lapply(measnames, function(x) ((rmanydf[,x]>0)&(rmanydf[,x]*4)%%2==1))),byrow = F,nrow = nrow(rmanydf)),1,any))*1
+#eighth units
+rmanydf$T_measure.t.0.125 <-( apply( matrix(unlist(lapply(measnames, function(x) ((rmanydf[,x]>0)&(rmanydf[,x]*8)%%2==1))),byrow = F,nrow = nrow(rmanydf)),1,any))*1
+
+measnames<-names(rmanydf)[grep("^I_.*\\.T$",names(rmanydf))]
+#Whole units
+rmanydf$T_measure.T.1 <-apply( matrix(unlist(lapply(measnames, function(x) ((rmanydf[,x]>0)&(floor(rmanydf[,x])==rmanydf[,x])))),byrow = F,nrow = nrow(rmanydf)),1,any)*1
+
+#Almost all recipes need timing
+rmanydf$T_timer<-(runif(npts)>0.001)*1
+
+# Join new recipes with existing test recipes
+rnew<-rbind(recipedf,rmanydf)
+write.csv(rnew,"../data/generated_recipes.csv",row.names=F) # write to file.
+head(rnew)
+```
+
+
+Finally, we check that we got unique recipes.
+```{r}
+nrow(distinct(rnew))
+```
+
+
+

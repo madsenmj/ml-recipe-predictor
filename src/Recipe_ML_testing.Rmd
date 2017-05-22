@@ -1,0 +1,131 @@
+---
+title: "Data Simulation"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(reshape2)
+library(dplyr)
+```
+
+
+# Data Simulation tests
+
+I build a dataframe with some test values to try the machine learning pattern.
+
+```{r}
+tpts<-100000
+
+df <- data.frame(RID=1:tpts,
+                 I_Ingr1=rpois(tpts,2),
+                 I_Ingr2=round(abs(rnorm(tpts,1,0.2)),1),
+                 I_Ingr3=(runif(tpts,0,1) > 0.6)*1)
+df$S_Skill1<-((df$I_Ingr1 * exp(-df$I_Ingr2))>1)*1
+df$S_Skill2 <- ((df$I_Ingr1 * 0.2 + 0.1*df$I_Ingr2^2 + exp(df$I_Ingr3))< 2)*1
+df$S_Skill3 <- (!xor(df$S_Skill2,df$S_Skill1))*1
+df$T_Tool1 <- (df$S_Skill1 * runif(tpts) > 0.2)*1
+df$T_Tool2 <- ((df$S_Skill3 >0 | df$S_Skill2)*runif(tpts) > 0.2 | !(df$T_Tool1>0))*1
+                 
+```
+
+I change all of the "S_" and "T_" columns to factors.
+
+```{r}
+
+getColNames <- function(df,colpat)
+{
+  subset(names(df),grepl( colpat , names( df ) ))
+}
+catNames <- getColNames(df,"S_|T_")
+df[catNames]<-lapply(catNames, function(x) {factor(df[,x])})
+head(df,10)
+
+```
+# Test/Train split
+
+I now do an 80/20 train/test split before training the machine to identify skills.
+
+```{r}
+library(caret)
+intrain<-createDataPartition(df$RID,p=0.8,list=FALSE)
+training<-df[intrain,]
+testing<-df[-intrain,]
+```
+
+I am going to fit models to each one of the "S" columns. 
+
+```{r}
+library(xgboost)
+library(pbapply)
+getPred <- function(training,testing,inputName, ScolName){
+  # With a single input, train and predict the outcome for that column
+  #formula1 <- as.formula(paste(ScolName,"~", paste(getColNames(training,inputName), collapse = "+")))
+  X_train <- training[getColNames(training,inputName)]
+  y_train <- training[ScolName]
+  X_test <- testing[getColNames(testing,inputName)]
+  
+  xgb <- xgboost(data = data.matrix(X_train), 
+           label = data.matrix(y_train)-1, 
+           eta = 0.1,
+           gamma = 2,
+           max_depth = 5, 
+           nround=50, 
+           subsample = 0.5,
+           colsample_bytree = 0.5,
+           seed = 1,
+           objective = "binary:logistic",
+           nthread = 3,
+           verbose = 0
+          )
+  xgbpredictions<-predict(xgb,data.matrix(X_test))
+  return(xgbpredictions)
+}
+
+getResults<- function(training,testing,inputCol, outputCol){
+  # Iterate through all columns to get predictions
+  sNames<-getColNames(training,outputCol)
+  
+  probcols<-suppressWarnings(pbsapply(sNames, function(x) {getPred(training,testing,inputCol,x)}))
+  colnames(probcols) <- paste0(sNames,".prob")
+  predcols <- 1*(probcols>0.5)
+  m1<-as.matrix(sapply(testing[sNames],function(x) as.numeric(as.character(x))))
+  accCols <- 1-1*xor(m1,predcols)
+  predcols <- apply(predcols,2,FUN=function(x) {factor(x)})
+  colnames(accCols) <- paste0(sNames,".acc")
+  
+  colnames(predcols) <- paste0(sNames,".pred")
+  
+  testoutS<-cbind(testing[sNames],predcols,accCols,probcols)
+  return(testoutS)
+}
+testoutS <- getResults(training,testing,"I_","S_")
+colMeans(testoutS[,grep(".acc",names(testoutS))])
+```
+How good did we do? This is a measure of the perfect matches.
+
+Now predict the T columns based on the S column predictions
+
+```{r}
+sNames<-getColNames(testing,"S_")
+# Replace the training values with our predictions
+testingSnew <- testing
+testingSnew[sNames] <- NULL
+testingSnew[paste0(sNames,".pred")] <- testoutS[paste0(sNames,".pred")]
+
+# Rename the training columns to match
+trainingSnew <- training
+trainingSnew[paste0(sNames,".pred")] <- trainingSnew[sNames]
+trainingSnew[sNames] <- NULL
+
+testoutT <- getResults(trainingSnew,testingSnew,"I_|S_","T_")
+colMeans(testoutT[,grep(".acc",names(testoutT))])
+```
+
+Checking against our predictions based on the original values:
+```{r}
+testoutT2 <- getResults(training,testing,"I_|S_","T_")
+colMeans(testoutT2[,grep(".acc",names(testoutT2))])
+```
+
+So we did a little worse in predicting "T_" when we used the predictions from the "S_" data.
