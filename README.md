@@ -14,7 +14,7 @@ I gathered a dozen Ratatouille recipes from various sources and used them as a t
 
 Once I had the [recipe variations](/data/generated_recipes.csv), I developed an algorithm that goes through the recipe, learns the patterns associated with each skill, then predicts the skills needed for a testing set of the data. There are two variations of this algorithm:
 
-1. [Using logistic regression] (/src/Recipe_Predictions.Rmd)
-2. [Using XGBoost] (/src/Recipe_Predictions_xgboost.Rmd)
+1. [Using logistic regression](/src/Recipe_Predictions.Rmd)
+2. [Using XGBoost](/src/Recipe_Predictions_xgboost.Rmd)
 
 The algorithm was developed using [this set of test data](/src/Recipe_ML_testing.Rmd)
